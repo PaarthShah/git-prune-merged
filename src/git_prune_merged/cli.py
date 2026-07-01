@@ -123,14 +123,24 @@ class Branch:
     upstream: str
 
 
-def gone_local_branches(pruned: set[str]) -> list[Branch]:
-    """Local branches whose upstream is among the pruned remote refs."""
-    fmt = "%(refname:short)%09%(upstream:short)"
+def gone_local_branches(remote: str) -> list[Branch]:
+    """Local branches whose upstream on ``remote`` is gone.
+
+    Keys off git's own ``[gone]`` tracking status, not just refs pruned in this
+    run -- a plain ``git fetch --prune`` (or a prior run) can have already
+    removed the remote-tracking ref while the local branch lingers. Branches
+    that were never pushed have no upstream and are excluded by construction.
+    """
+    fmt = "%(refname:short)%09%(upstream:short)%09%(upstream:track)"
     out = _out(["for-each-ref", f"--format={fmt}", "refs/heads"])
+    prefix = f"{remote}/"
     branches: list[Branch] = []
     for line in out.splitlines():
-        name, _, upstream = line.partition("\t")
-        if upstream and upstream in pruned:
+        parts = line.split("\t")
+        name = parts[0]
+        upstream = parts[1] if len(parts) > 1 else ""
+        track = parts[2] if len(parts) > 2 else ""
+        if upstream.startswith(prefix) and track == "[gone]":
             branches.append(Branch(name=name, upstream=upstream))
     return branches
 
@@ -211,7 +221,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             say("  [pruned]no stale remote-tracking refs[/pruned]")
 
-        candidates = gone_local_branches(pruned)
+        candidates = gone_local_branches(args.remote)
         cur = current_branch()
 
         deleted: list[str] = []
