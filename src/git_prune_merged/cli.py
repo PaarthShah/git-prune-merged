@@ -15,9 +15,27 @@ Workflow, run inside any git repo:
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
+
+from rich.console import Console
+from rich.theme import Theme
+
+from . import __version__
+
+_THEME = Theme(
+    {
+        "delete": "bold green",
+        "keep": "yellow",
+        "pruned": "dim",
+        "info": "cyan",
+        "reason": "dim",
+        "error": "bold red",
+        "dry": "bold magenta",
+    }
+)
 
 # Fallback identity so `git commit-tree` (used for squash detection) works even
 # in a repo without user.name / user.email configured. This never creates a
@@ -39,17 +57,11 @@ def _git(args: list[str], *, check: bool = True, env: dict[str, str] | None = No
         ["git", *args],
         text=True,
         capture_output=True,
-        env={**_os_environ(), **env} if env else None,
+        env={**os.environ, **env} if env else None,
     )
     if check and proc.returncode != 0:
         raise GitError((proc.stderr or proc.stdout or f"git {' '.join(args)} failed").strip())
     return proc
-
-
-def _os_environ() -> dict[str, str]:
-    import os
-
-    return dict(os.environ)
 
 
 def _out(args: list[str]) -> str:
@@ -153,7 +165,7 @@ def delete_branch(name: str) -> None:
     _git(["branch", "-D", name])
 
 
-def main(argv: list[str] | None = None) -> int:
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="git-prune-merged",
         description=(
@@ -166,11 +178,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--main", help="main branch name (default: auto-detect)")
     parser.add_argument("-n", "--dry-run", action="store_true", help="show what would happen; change nothing")
     parser.add_argument("-q", "--quiet", action="store_true", help="only print branches that are deleted")
-    args = parser.parse_args(argv)
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _build_parser().parse_args(argv)
+
+    console = Console(theme=_THEME)
+    err = Console(theme=_THEME, stderr=True)
 
     def say(msg: str = "") -> None:
         if not args.quiet:
-            print(msg)
+            console.print(msg)
 
     try:
         ensure_git_repo()
@@ -179,16 +199,17 @@ def main(argv: list[str] | None = None) -> int:
         if not mains:
             raise GitError(f"no ref found for main branch '{main_branch}'")
 
-        say(f"Pruning '{args.remote}' (main = {main_branch})…")
+        tag = " [dry](dry-run)[/dry]" if args.dry_run else ""
+        say(f"[info]Pruning[/info] '{args.remote}' (main = {main_branch}){tag}…")
         pruned = prune_dry_run(args.remote)
         if not args.dry_run:
             do_prune(args.remote)
 
         if pruned:
             for ref in sorted(pruned):
-                say(f"  pruned remote ref: {ref}")
+                say(f"  [pruned]pruned remote ref: {ref}[/pruned]")
         else:
-            say("  no stale remote-tracking refs")
+            say("  [pruned]no stale remote-tracking refs[/pruned]")
 
         candidates = gone_local_branches(pruned)
         cur = current_branch()
@@ -202,30 +223,28 @@ def main(argv: list[str] | None = None) -> int:
             if not is_merged(b.name, mains):
                 kept.append((b.name, "not merged to main"))
                 continue
-            if args.dry_run:
-                deleted.append(b.name)
-            else:
+            if not args.dry_run:
                 delete_branch(b.name)
-                deleted.append(b.name)
+            deleted.append(b.name)
 
         say()
         verb = "Would delete" if args.dry_run else "Deleted"
         if deleted:
-            say(f"{verb} {len(deleted)} merged branch(es):")
+            say(f"[delete]{verb} {len(deleted)} merged branch(es):[/delete]")
             for name in sorted(deleted):
-                print(f"  ✔ {name}")
+                say(f"  [delete]✔ {name}[/delete]")
         else:
-            say("No local branches to delete.")
+            say("[pruned]No local branches to delete.[/pruned]")
 
         if kept and not args.quiet:
             say()
-            say(f"Kept {len(kept)} branch(es):")
+            say(f"[keep]Kept {len(kept)} branch(es):[/keep]")
             for name, reason in sorted(kept):
-                say(f"  • {name} — {reason}")
+                say(f"  [keep]•[/keep] {name} [reason]— {reason}[/reason]")
 
         return 0
     except GitError as exc:
-        print(f"git-prune-merged: {exc}", file=sys.stderr)
+        err.print(f"[error]git-prune-merged:[/error] {exc}")
         return 1
     except KeyboardInterrupt:
         return 130
