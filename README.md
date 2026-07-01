@@ -25,7 +25,7 @@ and asking `git cherry` whether that patch is already in main.
 ## Install
 
 ```sh
-uv tool install git+https://github.com/<you>/git-prune-merged
+uv tool install git+https://github.com/PaarthShah/git-prune-merged
 # or, from a local clone:
 uv tool install /path/to/git-prune-merged
 ```
