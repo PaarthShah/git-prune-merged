@@ -82,6 +82,25 @@ def ref_exists(ref: str) -> bool:
     return _git(["rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], check=False).returncode == 0
 
 
+def worktree_branches() -> dict[str, str]:
+    """Map branch name -> worktree path for every branch checked out in a worktree.
+
+    A branch checked out in a worktree cannot be deleted without disturbing that
+    worktree, so we skip it rather than letting `git branch -D` abort the run.
+    Detached-HEAD worktrees have no branch line and are ignored.
+    """
+    out = _out(["worktree", "list", "--porcelain"])
+    held: dict[str, str] = {}
+    path = ""
+    for line in out.splitlines():
+        if line.startswith("worktree "):
+            path = line[len("worktree ") :]
+        elif line.startswith("branch "):
+            ref = line[len("branch ") :]  # e.g. "refs/heads/foo"
+            held[ref.removeprefix("refs/heads/")] = path
+    return held
+
+
 def detect_main(remote: str) -> str:
     """Best-effort main-branch name: remote HEAD, else main/master."""
     proc = _git(["symbolic-ref", "--quiet", "--short", f"refs/remotes/{remote}/HEAD"], check=False)
@@ -223,12 +242,16 @@ def main(argv: list[str] | None = None) -> int:
 
         candidates = gone_local_branches(args.remote)
         cur = current_branch()
+        held = worktree_branches()
 
         deleted: list[str] = []
         kept: list[tuple[str, str]] = []
         for b in candidates:
             if b.name == cur:
                 kept.append((b.name, "checked out (cannot delete current branch)"))
+                continue
+            if b.name in held:
+                kept.append((b.name, f"checked out in worktree at {held[b.name]}"))
                 continue
             if not is_merged(b.name, mains):
                 kept.append((b.name, "not merged to main"))
