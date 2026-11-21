@@ -153,6 +153,23 @@ def worktree_branches() -> dict[str, str]:
     return held
 
 
+def protected_branches() -> set[str]:
+    """Branches opted out of bulk cleanup with ``branch.<name>.deleteMerged = false``.
+
+    Same setting that ``git branch --delete-merged`` (git 2.56+) honours.
+    """
+    proc = _git(
+        ["config", "--type=bool", "--get-regexp", r"^branch\..*\.deletemerged$"],
+        check=False,
+    )
+    protected: set[str] = set()
+    for line in proc.stdout.splitlines():
+        key, _, value = line.partition(" ")
+        if value == "false":
+            protected.add(key[len("branch.") : -len(".deletemerged")])
+    return protected
+
+
 def detect_main(remote: str) -> str:
     """Best-effort main-branch name: remote HEAD, else main/master."""
     proc = _git(
@@ -542,6 +559,7 @@ def main(argv: list[str] | None = None) -> int:
         candidates = gone_local_branches(args.remote, pruned)
         cur = current_branch()
         held = worktree_branches()
+        protected = protected_branches()
         checker = MergeChecker(mains)
 
         deleted: list[tuple[str, str]] = []
@@ -552,6 +570,10 @@ def main(argv: list[str] | None = None) -> int:
                 kept.append((b.name, "checked out (cannot delete current branch)"))
             elif b.name in held:
                 kept.append((b.name, f"checked out in worktree at {held[b.name]}"))
+            elif b.name in protected:
+                kept.append(
+                    (b.name, f"protected by branch.{b.name}.deleteMerged=false")
+                )
             elif proof := checker.direct(b.tip):
                 deleted.append((b.name, proof))
             else:

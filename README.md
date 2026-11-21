@@ -12,9 +12,12 @@ Running it inside a repo does three things:
 
 It **never** deletes:
 
-- branches that are not provably merged to main, or
+- branches that are not provably merged to main,
 - branches that were **never pushed** (they have no upstream to prune, so they
-  are excluded automatically).
+  are excluded automatically),
+- branches checked out in a worktree, or
+- branches you protect with `git config branch.<name>.deleteMerged false` (the
+  same setting `git branch --delete-merged` honours in git 2.56+).
 
 ### How "merged" is decided
 
