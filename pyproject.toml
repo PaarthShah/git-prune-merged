@@ -2,7 +2,7 @@
 name = "git-prune-merged"
 description = "Prune deleted remote branches, then delete only the local branches that were merged (including squash-merged) to main."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.15"
 license = { text = "MIT" }
 dependencies = ["rich>=13"]
 dynamic = ["version"]
@@ -25,3 +25,55 @@ version-file = "src/git_prune_merged/_version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/git_prune_merged"]
+
+[tool.ruff]
+target-version = "py315"
+line-length = 120
+# Apply unsafe fixes too (e.g. TID254 adding `lazy`), in the CLI, editors and pre-commit alike.
+unsafe-fixes = true
+extend-exclude = ["src/git_prune_merged/_version.py"]
+
+[tool.ruff.lint]
+# Preview rules apply only when selected by their full code below.
+preview = true
+explicit-preview-rules = true
+select = [
+    "F",       # pyflakes
+    "E",       # pycodestyle errors
+    "W",       # pycodestyle warnings
+    "I",       # isort
+    "N",       # pep8-naming
+    "UP",      # pyupgrade
+    "B",       # flake8-bugbear
+    "A",       # flake8-builtins
+    "C4",      # flake8-comprehensions
+    "SIM",     # flake8-simplify
+    "RUF",     # ruff-specific
+    "PIE",     # flake8-pie
+    "T20",     # flake8-print
+    "PGH",     # pygrep-hooks
+    "RSE",     # flake8-raise
+    "RET",     # flake8-return
+    "FLY",     # flynt
+    "PERF",    # perflint
+    "LOG",     # flake8-logging
+    "UP048",   # pyupgrade: while-one (preview)
+    "UP051",   # pyupgrade: deprecated-abc-decorator (preview)
+    "UP052",   # pyupgrade: context-manager-iterator (preview)
+    "PLC0415", # import-outside-top-level: hoist to a module-level `lazy` import instead
+    "TID254",  # lazy-import-mismatch: enforce `require-lazy` below
+    "TID255",  # lazy-import-immediately-resolved (preview)
+]
+ignore = [
+    "E501",   # line-too-long (handled by formatter)
+    "RET505", # unnecessary-else-after-return (readability preference)
+    "SIM108", # ternary (readability preference)
+]
+
+[tool.ruff.lint.flake8-tidy-imports]
+# Every import that can be lazy must be.
+require-lazy = "all"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

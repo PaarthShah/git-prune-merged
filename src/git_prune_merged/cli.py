@@ -25,33 +25,19 @@ A branch counts as merged when any of these hold, cheapest first:
     main were edited again).
 """
 
-from __future__ import annotations
+lazy import argparse
+lazy import contextlib
+lazy import os
+lazy import subprocess
+lazy from collections import defaultdict, deque
+lazy from collections.abc import Iterable
+lazy from dataclasses import dataclass
 
-import argparse
-import contextlib
-import os
-import subprocess
-from collections import defaultdict, deque
-from collections.abc import Iterable
-from dataclasses import dataclass
+lazy from rich.console import Console
+lazy from rich.markup import escape
+lazy from rich.theme import Theme
 
-from rich.console import Console
-from rich.markup import escape
-from rich.theme import Theme
-
-from . import __version__
-
-_THEME = Theme(
-    {
-        "delete": "bold green",
-        "keep": "yellow",
-        "pruned": "dim",
-        "info": "cyan",
-        "reason": "dim",
-        "error": "bold red",
-        "dry": "bold magenta",
-    }
-)
+lazy from . import __version__
 
 # Fallback identity so `git commit-tree` (used for squash detection) works even
 # in a repo without user.name / user.email configured. This never creates a
@@ -81,6 +67,20 @@ _SCRATCH_NS = "refs/git-prune-merged"
 _MAX_LANDED_CANDIDATES = 400
 
 
+def _theme() -> Theme:
+    return Theme(
+        {
+            "delete": "bold green",
+            "keep": "yellow",
+            "pruned": "dim",
+            "info": "cyan",
+            "reason": "dim",
+            "error": "bold red",
+            "dry": "bold magenta",
+        }
+    )
+
+
 class GitError(RuntimeError):
     pass
 
@@ -90,25 +90,23 @@ def _git(
     *,
     check: bool = True,
     env: dict[str, str] | None = None,
-    input: str | None = None,
+    stdin: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     proc = subprocess.run(
         ["git", *args],
         check=False,
         text=True,
         capture_output=True,
-        input=input,
+        input=stdin,
         env={**os.environ, **env} if env else None,
     )
     if check and proc.returncode != 0:
-        raise GitError(
-            (proc.stderr or proc.stdout or f"git {' '.join(args)} failed").strip()
-        )
+        raise GitError((proc.stderr or proc.stdout or f"git {' '.join(args)} failed").strip())
     return proc
 
 
-def _out(args: list[str], *, input: str | None = None) -> str:
-    return _git(args, input=input).stdout.strip()
+def _out(args: list[str], *, stdin: str | None = None) -> str:
+    return _git(args, stdin=stdin).stdout.strip()
 
 
 def ensure_git_repo() -> None:
@@ -122,12 +120,7 @@ def current_branch() -> str | None:
 
 
 def ref_exists(ref: str) -> bool:
-    return (
-        _git(
-            ["rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], check=False
-        ).returncode
-        == 0
-    )
+    return _git(["rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], check=False).returncode == 0
 
 
 def rev_parse(rev: str) -> str:
@@ -229,7 +222,7 @@ def gone_local_branches(remote: str, pruning: set[str]) -> list[Branch]:
     prefix = f"{remote}/"
     branches: list[Branch] = []
     for line in out.splitlines():
-        name, tip, upstream, track = (line.split("\t") + ["", "", ""])[:4]
+        name, tip, upstream, track = [*line.split("\t"), "", "", ""][:4]
         if upstream.startswith(prefix) and (track == "[gone]" or upstream in pruning):
             branches.append(Branch(name=name, upstream=upstream, tip=tip))
     return branches
@@ -249,9 +242,7 @@ def is_squash_merged(rev: str, main: str) -> bool:
     if not merge_base:
         return False
     tree = _out(["rev-parse", f"{rev}^{{tree}}"])
-    fake = _git(
-        ["commit-tree", tree, "-p", merge_base, "-m", "_"], env=_COMMIT_ENV
-    ).stdout.strip()
+    fake = _git(["commit-tree", tree, "-p", merge_base, "-m", "_"], env=_COMMIT_ENV).stdout.strip()
     cherry = _out(["cherry", main, fake])
     return cherry.startswith("-")
 
@@ -267,7 +258,7 @@ def merge_tree_batch(merges: list[tuple[str, str, str]]) -> list[str | None]:
     stdin = "".join(f"{base} -- {ours} {theirs}\n" for base, ours, theirs in merges)
     proc = _git(
         ["merge-tree", "--stdin", "--write-tree", "--no-messages", "--name-only"],
-        input=stdin,
+        stdin=stdin,
         check=False,
     )
     if proc.returncode not in (0, 1):
@@ -289,9 +280,7 @@ def merge_tree_batch(merges: list[tuple[str, str, str]]) -> list[str | None]:
 
 
 def _changed_paths(old: str, new: str) -> set[str]:
-    out = _out(
-        ["-c", "core.quotePath=false", "diff", "--name-only", "--no-renames", old, new]
-    )
+    out = _out(["-c", "core.quotePath=false", "diff", "--name-only", "--no-renames", old, new])
     return set(out.splitlines())
 
 
@@ -358,7 +347,7 @@ def landed_in(rev: str, main: str) -> str | None:
     second: list[tuple[str, str, str]] = []
     second_idx: list[int] = []
     pos = 0
-    for idx, (commit, tree, parent, touched) in enumerate(candidates):
+    for idx, (commit, tree, parent, _touched) in enumerate(candidates):
         if idx in range_checks:
             if results[pos] == tree:
                 hits.add(idx)
@@ -369,7 +358,7 @@ def landed_in(rev: str, main: str) -> str | None:
             if replayed is not None and idx not in hits:
                 second.append((parent, commit, replayed))
                 second_idx.append(idx)
-    for idx, result in zip(second_idx, merge_tree_batch(second)):
+    for idx, result in zip(second_idx, merge_tree_batch(second), strict=True):
         if result == candidates[idx][1]:
             hits.add(idx)
     return candidates[min(hits)][0] if hits else None
@@ -415,7 +404,7 @@ class MergeChecker:
 def _clear_scratch_refs() -> None:
     refs = _out(["for-each-ref", "--format=delete %(refname)", _SCRATCH_NS])
     if refs:
-        _git(["update-ref", "--stdin"], input=refs + "\n")
+        _git(["update-ref", "--stdin"], stdin=refs + "\n")
 
 
 def fetch_review_heads(remote: str) -> dict[str, str]:
@@ -426,9 +415,7 @@ def fetch_review_heads(remote: str) -> dict[str, str]:
     objects stay in the object store until gc, which keeps repeat runs cheap.
     """
     _clear_scratch_refs()
-    refspecs = [
-        f"+{pat}:{_SCRATCH_NS}/{i}/*" for i, pat in enumerate(REVIEW_REF_PATTERNS)
-    ]
+    refspecs = [f"+{pat}:{_SCRATCH_NS}/{i}/*" for i, pat in enumerate(REVIEW_REF_PATTERNS)]
     try:
         _git(
             [
@@ -453,14 +440,12 @@ def fetch_review_heads(remote: str) -> dict[str, str]:
     return heads
 
 
-def heads_containing(
-    tips: Iterable[str], heads: Iterable[str], mains: list[str]
-) -> dict[str, list[str]]:
+def heads_containing(tips: Iterable[str], heads: Iterable[str], mains: list[str]) -> dict[str, list[str]]:
     """For each tip, the heads it is an ancestor of (looking only outside main)."""
     head_set = set(heads)
     stdin = "\n".join([*head_set, *(f"^{m}" for m in mains)]) + "\n"
     children: dict[str, list[str]] = defaultdict(list)
-    for line in _out(["rev-list", "--parents", "--stdin"], input=stdin).splitlines():
+    for line in _out(["rev-list", "--parents", "--stdin"], stdin=stdin).splitlines():
         commit, *parents = line.split()
         for p in parents:
             children[p].append(commit)
@@ -497,9 +482,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "or were never pushed, are always kept."
         ),
     )
-    parser.add_argument(
-        "--remote", default="origin", help="remote to prune (default: origin)"
-    )
+    parser.add_argument("--remote", default="origin", help="remote to prune (default: origin)")
     parser.add_argument("--main", help="main branch name (default: auto-detect)")
     parser.add_argument(
         "-n",
@@ -518,17 +501,16 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="don't fetch pull/merge request heads from the remote",
     )
-    parser.add_argument(
-        "--version", action="version", version=f"%(prog)s {__version__}"
-    )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
 
-    console = Console(theme=_THEME)
-    err = Console(theme=_THEME, stderr=True)
+    theme = _theme()
+    console = Console(theme=theme)
+    err = Console(theme=theme, stderr=True)
 
     def say(msg: str = "") -> None:
         if not args.quiet:
@@ -544,9 +526,7 @@ def main(argv: list[str] | None = None) -> int:
         tag = " [dry](dry-run)[/dry]" if args.dry_run else ""
         say(f"[info]Pruning[/info] '{args.remote}' (main = {main_branch}){tag}…")
         pruned = prune_dry_run(args.remote)
-        pruned_tips = {
-            rev_parse(ref): f"{ref} (before prune)" for ref in pruned if ref_exists(ref)
-        }
+        pruned_tips = {rev_parse(ref): f"{ref} (before prune)" for ref in pruned if ref_exists(ref)}
         if not args.dry_run:
             do_prune(args.remote)
 
@@ -571,9 +551,7 @@ def main(argv: list[str] | None = None) -> int:
             elif b.name in held:
                 kept.append((b.name, f"checked out in worktree at {held[b.name]}"))
             elif b.name in protected:
-                kept.append(
-                    (b.name, f"protected by branch.{b.name}.deleteMerged=false")
-                )
+                kept.append((b.name, f"protected by branch.{b.name}.deleteMerged=false"))
             elif proof := checker.direct(b.tip):
                 deleted.append((b.name, proof))
             else:
@@ -590,19 +568,9 @@ def main(argv: list[str] | None = None) -> int:
                     try:
                         heads = {**fetch_review_heads(args.remote), **heads}
                     except GitError as exc:
-                        err.print(
-                            f"[keep]warning:[/keep] could not fetch review refs: {escape(str(exc))}"
-                        )
-            containing = (
-                heads_containing((b.tip for b in unresolved), heads, mains)
-                if heads
-                else {}
-            )
-            with (
-                console.status("Checking unresolved branches…")
-                if not args.quiet
-                else contextlib.nullcontext()
-            ):
+                        err.print(f"[keep]warning:[/keep] could not fetch review refs: {escape(str(exc))}")
+            containing = heads_containing((b.tip for b in unresolved), heads, mains) if heads else {}
+            with console.status("Checking unresolved branches…") if not args.quiet else contextlib.nullcontext():
                 for b in unresolved:
                     proof = None
                     for head in containing.get(b.tip, []):
@@ -629,9 +597,7 @@ def main(argv: list[str] | None = None) -> int:
                 if args.quiet:
                     console.print(f"[delete]✔ {escape(name)}[/delete]")
                 else:
-                    say(
-                        f"  [delete]✔ {escape(name)}[/delete] [reason]— {escape(proof)}[/reason]"
-                    )
+                    say(f"  [delete]✔ {escape(name)}[/delete] [reason]— {escape(proof)}[/reason]")
         else:
             say("[pruned]No local branches to delete.[/pruned]")
 
@@ -639,9 +605,7 @@ def main(argv: list[str] | None = None) -> int:
             say()
             say(f"[keep]Kept {len(kept)} branch(es):[/keep]")
             for name, reason in sorted(kept):
-                say(
-                    f"  [keep]•[/keep] {escape(name)} [reason]— {escape(reason)}[/reason]"
-                )
+                say(f"  [keep]•[/keep] {escape(name)} [reason]— {escape(reason)}[/reason]")
 
         return 0
     except GitError as exc:

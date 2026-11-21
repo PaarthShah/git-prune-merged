@@ -1,6 +1,6 @@
 """Prune gone remotes and delete only the local branches merged to main."""
 
-from importlib.metadata import PackageNotFoundError, version
+lazy from importlib.metadata import PackageNotFoundError, version
 
 try:
     __version__ = version("git-prune-merged")

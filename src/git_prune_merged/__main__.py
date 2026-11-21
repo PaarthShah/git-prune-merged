@@ -1,4 +1,4 @@
-from git_prune_merged.cli import main
+lazy from git_prune_merged.cli import main
 
 if __name__ == "__main__":
     raise SystemExit(main())

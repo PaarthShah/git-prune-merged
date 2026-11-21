@@ -57,6 +57,8 @@ example, 2,500 PRs took about 20s and 200 MB), and later runs are fast. Pass
 
 ## Install
 
+Requires Python 3.15+.
+
 ```sh
 uv tool install git+https://github.com/PaarthShah/git-prune-merged
 # or, from a local clone:
@@ -83,3 +85,19 @@ Options:
 
 "Merged to main" is checked against `origin/main` first (the source of truth for
 merges) and then local `main`, so it works even if your local `main` is stale.
+
+## Development
+
+Linting and formatting are pure ruff, configured in `pyproject.toml`. Every
+import that can be lazy must use Python 3.15's `lazy` keyword (`TID254` with
+`require-lazy = "all"`). Hooks run ruff and keep `uv.lock` in sync:
+
+```sh
+uv tool install pre-commit --with pre-commit-uv
+pre-commit install
+pre-commit run --all-files
+```
+
+Unsafe fixes are enabled (`unsafe-fixes = true`), so `ruff check --fix` and the
+hook add `lazy` automatically. Imports of several names at once
+(`from x import a, b`) still have to be made lazy by hand.

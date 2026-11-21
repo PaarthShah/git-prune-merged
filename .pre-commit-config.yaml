@@ -1,0 +1,19 @@
+# Install:  uv tool install pre-commit --with pre-commit-uv
+# Setup:    pre-commit install
+# Run all:  pre-commit run --all-files
+
+repos:
+  # ── Python linting & formatting ─────────────────────────
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.6
+    hooks:
+      - id: ruff-check
+        args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format
+
+  # ── uv lockfile sync ────────────────────────────────────
+  - repo: https://github.com/astral-sh/uv-pre-commit
+    rev: 0.13.9
+    hooks:
+      - id: uv-lock
+        name: uv lock
